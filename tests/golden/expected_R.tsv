@@ -1,0 +1,4 @@
+# name	sample_size	num_groups	R  (skbio anosim, permutations=0; deterministic)
+doc	4	2	0.25
+tie	7	3	1.0
+med	51	3	0.24407467716036813
