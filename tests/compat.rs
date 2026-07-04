@@ -37,6 +37,46 @@ fn ours(table: &str, perms: usize, seed: u64) -> HashMap<String, String> {
     parse_result(&String::from_utf8(out.stdout).unwrap())
 }
 
+/// Run ours against a distance-matrix golden with a shared grouping, returning
+/// the raw process output so degenerate-input tests can assert a clean failure.
+fn ours_raw(dm: &str, groups: &str) -> std::process::Output {
+    Command::new(ours_bin())
+        .arg(golden(dm))
+        .args(["--grouping", &golden(groups)])
+        .args(["--permutations", "0"])
+        .output()
+        .expect("run rsomics-anosim")
+}
+
+/// skbio's `DistanceMatrix` constructor rejects NaN cells and asymmetric input
+/// (both raise `DistanceMatrixError`, exit 1). Ours must reject them the same
+/// way — non-zero exit, a clear stderr message, and crucially no panic (a panic
+/// would print `thread 'main' panicked` and abort, not fail cleanly). Committed
+/// goldens, no live oracle; skbio parity is confirmed in `skbio_rejects_degenerate`.
+#[test]
+fn rejects_degenerate_matrices() {
+    for dm in ["nan_dm.tsv", "asym_dm.tsv"] {
+        let out = ours_raw(dm, "degenerate_groups.tsv");
+        assert!(
+            !out.status.success(),
+            "{dm}: ours accepted a matrix skbio rejects (exit 0)"
+        );
+        assert!(
+            out.status.code().is_some(),
+            "{dm}: ours did not exit cleanly (killed by signal / abort)"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("panicked"),
+            "{dm}: ours panicked instead of failing loudly:\n{stderr}"
+        );
+        assert!(
+            !stderr.trim().is_empty(),
+            "{dm}: ours failed without an error message"
+        );
+    }
+}
+
 /// Committed skbio-captured R values (permutations=0, deterministic). Runs with
 /// no scikit-bio present — this is the always-on regression gate.
 #[test]
@@ -134,6 +174,33 @@ fn differential(table: &str) {
         tp < 0.05,
         "{table} p significance disagrees: ours {op} vs skbio {tp}"
     );
+}
+
+/// Live parity for the rejection path: feed the same degenerate goldens to
+/// skbio and confirm its `DistanceMatrix` constructor raises (exit 1). Gated on
+/// scikit-bio being importable, like the numeric differentials.
+#[test]
+fn skbio_rejects_degenerate() {
+    let Some(py) = skbio_python() else { return };
+    for dm in ["nan_dm.tsv", "asym_dm.tsv"] {
+        let out = Command::new(&py)
+            .arg(oracle_script())
+            .arg(golden(dm))
+            .arg(golden("degenerate_groups.tsv"))
+            .arg("0")
+            .arg("42")
+            .output()
+            .expect("run scikit-bio oracle");
+        assert!(
+            !out.status.success(),
+            "{dm}: skbio accepted a matrix we now reject"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("DistanceMatrixError"),
+            "{dm}: skbio failed for an unexpected reason:\n{stderr}"
+        );
+    }
 }
 
 #[test]
