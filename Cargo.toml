@@ -1,6 +1,6 @@
 [package]
 name = "rsomics-anosim"
-version = "0.1.1"
+version = "0.1.2"
 description = "ANOSIM (Clarke 1993) test for group differences from a distance matrix — scikit-bio skbio.stats.distance.anosim equivalent (tie-averaged ranks, permutation p-value)"
 edition = "2024"
 rust-version = "1.91"

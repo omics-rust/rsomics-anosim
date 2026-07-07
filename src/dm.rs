@@ -7,8 +7,9 @@ use rsomics_common::{Result, RsomicsError};
 /// (ID + delimited distances). This is what `rsomics-beta-diversity` emits.
 ///
 /// Parsing enforces the same invariants skbio's `DistanceMatrix` constructor
-/// does — no NaN cells, symmetric, hollow (zero) diagonal — so a matrix that
-/// skbio would reject is rejected here too rather than yielding a meaningless R.
+/// does — unique IDs, hollow (zero) diagonal, symmetric, no NaN cells — so a
+/// matrix skbio would reject is rejected here too rather than yielding a
+/// meaningless R.
 pub struct DistanceMatrix {
     pub ids: Vec<String>,
     /// Row-major `n × n`.
@@ -83,13 +84,6 @@ impl DistanceMatrix {
                         field.trim()
                     ))
                 })?;
-                if v.is_nan() {
-                    return Err(RsomicsError::InvalidInput(format!(
-                        "row {} ('{label}'), column {}: NaN cell — distance matrix must contain no NaNs",
-                        row + 1,
-                        col + 1
-                    )));
-                }
                 data[row * n + col] = v;
                 col += 1;
             }
@@ -106,29 +100,58 @@ impl DistanceMatrix {
                 "{row} data rows but {n} IDs in the header"
             )));
         }
-        for i in 0..n {
-            if data[i * n + i] != 0.0 {
-                return Err(RsomicsError::InvalidInput(format!(
-                    "diagonal must be zero: [{}][{}] = {} (matrix must be hollow)",
-                    i + 1,
-                    i + 1,
-                    data[i * n + i]
-                )));
+        let dm = DistanceMatrix { ids, data };
+        dm.validate()?;
+        Ok(dm)
+    }
+
+    /// Enforce the invariants skbio's `DistanceMatrix` constructor checks, in its
+    /// order — unique IDs, hollow diagonal, then symmetry — with skbio's exact
+    /// wording. The symmetry pass also rejects any NaN cell: skbio compares cells
+    /// with `!=`, and `NaN != NaN`, so a NaN never equals its mirror.
+    ///
+    /// # Errors
+    /// Duplicate IDs, a non-zero diagonal cell, or an asymmetric / NaN cell.
+    fn validate(&self) -> Result<()> {
+        let n = self.ids.len();
+
+        let mut seen = std::collections::HashSet::with_capacity(n);
+        let mut dups = Vec::new();
+        for id in &self.ids {
+            if !seen.insert(id.as_str()) && !dups.contains(&id.as_str()) {
+                dups.push(id.as_str());
             }
+        }
+        if !dups.is_empty() {
+            let listed = dups
+                .iter()
+                .map(|d| format!("'{d}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(RsomicsError::InvalidInput(format!(
+                "IDs must be unique. Found the following duplicate IDs: {listed}"
+            )));
+        }
+
+        for i in 0..n {
+            if self.data[i * n + i] != 0.0 {
+                return Err(RsomicsError::InvalidInput(
+                    "Data must be hollow (i.e., the diagonal can only contain zeros).".into(),
+                ));
+            }
+        }
+
+        for i in 0..n {
             for j in (i + 1)..n {
-                let (a, b) = (data[i * n + j], data[j * n + i]);
-                if a != b {
-                    return Err(RsomicsError::InvalidInput(format!(
-                        "matrix is not symmetric: [{}][{}] = {a} but [{}][{}] = {b}",
-                        i + 1,
-                        j + 1,
-                        j + 1,
-                        i + 1
-                    )));
+                if self.data[i * n + j] != self.data[j * n + i] {
+                    return Err(RsomicsError::InvalidInput(
+                        "Data must be symmetric and cannot contain NaNs.".into(),
+                    ));
                 }
             }
         }
-        Ok(DistanceMatrix { ids, data })
+
+        Ok(())
     }
 
     #[must_use]
@@ -161,13 +184,19 @@ mod tests {
     #[test]
     fn asymmetric_rejected() {
         let err = err_of("\ta\tb\na\t0\t1\nb\t2\t0\n");
-        assert!(err.contains("not symmetric"), "{err}");
+        assert!(err.contains("symmetric"), "{err}");
     }
 
     #[test]
     fn nonzero_diagonal_rejected() {
         let err = err_of("\ta\tb\na\t9\t1\nb\t1\t0\n");
         assert!(err.contains("hollow"), "{err}");
+    }
+
+    #[test]
+    fn duplicate_ids_rejected() {
+        let err = err_of("\ta\ta\na\t0\t1\na\t1\t0\n");
+        assert!(err.contains("unique") && err.contains("'a'"), "{err}");
     }
 
     #[test]

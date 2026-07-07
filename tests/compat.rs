@@ -48,14 +48,15 @@ fn ours_raw(dm: &str, groups: &str) -> std::process::Output {
         .expect("run rsomics-anosim")
 }
 
-/// skbio's `DistanceMatrix` constructor rejects NaN cells and asymmetric input
-/// (both raise `DistanceMatrixError`, exit 1). Ours must reject them the same
-/// way — non-zero exit, a clear stderr message, and crucially no panic (a panic
-/// would print `thread 'main' panicked` and abort, not fail cleanly). Committed
-/// goldens, no live oracle; skbio parity is confirmed in `skbio_rejects_degenerate`.
+/// skbio's `DistanceMatrix` constructor rejects a NaN cell, asymmetry, a
+/// non-hollow diagonal, and duplicate IDs (raising `DistanceMatrixError` /
+/// `PairwiseMatrixError`, exit 1). Ours must reject each the same way — non-zero
+/// exit, a clear stderr message, and crucially no panic (a panic would print
+/// `thread 'main' panicked` and abort, not fail cleanly). Committed goldens, no
+/// live oracle; skbio parity is confirmed in `skbio_rejects_degenerate`.
 #[test]
 fn rejects_degenerate_matrices() {
-    for dm in ["nan_dm.tsv", "asym_dm.tsv"] {
+    for dm in ["nan_dm.tsv", "asym_dm.tsv", "hollow_dm.tsv", "dup_dm.tsv"] {
         let out = ours_raw(dm, "degenerate_groups.tsv");
         assert!(
             !out.status.success(),
@@ -182,7 +183,16 @@ fn differential(table: &str) {
 #[test]
 fn skbio_rejects_degenerate() {
     let Some(py) = skbio_python() else { return };
-    for dm in ["nan_dm.tsv", "asym_dm.tsv"] {
+    // Each fixture maps to the skbio exception class its constructor raises:
+    // hollow/symmetry/NaN are `DistanceMatrixError`; duplicate IDs are caught
+    // earlier as `PairwiseMatrixError`.
+    let cases = [
+        ("nan_dm.tsv", "DistanceMatrixError"),
+        ("asym_dm.tsv", "DistanceMatrixError"),
+        ("hollow_dm.tsv", "DistanceMatrixError"),
+        ("dup_dm.tsv", "PairwiseMatrixError"),
+    ];
+    for (dm, err_class) in cases {
         let out = Command::new(&py)
             .arg(oracle_script())
             .arg(golden(dm))
@@ -197,7 +207,7 @@ fn skbio_rejects_degenerate() {
         );
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            stderr.contains("DistanceMatrixError"),
+            stderr.contains(err_class),
             "{dm}: skbio failed for an unexpected reason:\n{stderr}"
         );
     }
