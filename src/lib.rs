@@ -4,13 +4,12 @@ use rayon::prelude::*;
 use rsomics_common::{Result, RsomicsError};
 use serde::Serialize;
 
-mod dm;
 mod fmt;
 mod rng;
 
-pub use dm::DistanceMatrix;
 use fmt::push_pyrepr;
 use rng::SplitMix64;
+pub use rsomics_distance::DistanceMatrix;
 
 #[derive(Serialize)]
 pub struct AnosimResult {
