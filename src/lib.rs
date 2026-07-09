@@ -2,6 +2,7 @@ use std::io::{BufRead, Write};
 
 use rayon::prelude::*;
 use rsomics_common::{Result, RsomicsError};
+use serde::Serialize;
 
 mod dm;
 mod fmt;
@@ -11,6 +12,7 @@ pub use dm::DistanceMatrix;
 use fmt::push_pyrepr;
 use rng::SplitMix64;
 
+#[derive(Serialize)]
 pub struct AnosimResult {
     pub sample_size: usize,
     pub num_groups: usize,

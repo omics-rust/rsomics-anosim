@@ -3,10 +3,10 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
-use rsomics_common::{CommonFlags, Result, RsomicsError, Tool, ToolMeta};
+use rsomics_common::{CommonFlags, Result, RsomicsError, ToolMeta};
 use rsomics_help::{Example, FlagSpec, HelpSpec, Origin, Section};
 
-use rsomics_anosim::run;
+use rsomics_anosim::{AnosimResult, DistanceMatrix, anosim, read_grouping};
 
 pub const META: ToolMeta = ToolMeta {
     name: env!("CARGO_PKG_NAME"),
@@ -40,15 +40,11 @@ pub struct Cli {
     pub common: CommonFlags,
 }
 
-impl Tool for Cli {
-    fn meta() -> ToolMeta {
-        META
-    }
-    fn common(&self) -> &CommonFlags {
-        &self.common
-    }
-
-    fn execute(self) -> Result<()> {
+impl Cli {
+    /// Compute ANOSIM and, unless `--json`, write the skbio-style text table
+    /// to the chosen output. Under `--json` the framework serialises the
+    /// returned struct into the result envelope, so nothing is written here.
+    pub fn report(self) -> Result<AnosimResult> {
         self.common.install_rayon_pool()?;
 
         let delim = if self.csv { ',' } else { '\t' };
@@ -63,23 +59,25 @@ impl Tool for Cli {
         let grouping_reader = BufReader::new(File::open(&self.grouping).map_err(|e| {
             RsomicsError::InvalidInput(format!("{}: {e}", self.grouping.display()))
         })?);
-        let mut out: Box<dyn Write> = if self.output == "-" {
-            Box::new(BufWriter::new(std::io::stdout().lock()))
-        } else {
-            Box::new(BufWriter::new(
-                File::create(&self.output).map_err(RsomicsError::Io)?,
-            ))
-        };
+
+        let dm = DistanceMatrix::parse(dm_reader, delim)?;
+        let grouping = read_grouping(grouping_reader, &dm.ids)?;
         let seed = self.common.seed.unwrap_or(0);
-        run(
-            dm_reader,
-            grouping_reader,
-            &mut out,
-            delim,
-            self.permutations,
-            seed,
-        )?;
-        out.flush().map_err(RsomicsError::Io)
+        let res = anosim(&dm, &grouping, self.permutations, seed)?;
+
+        if !self.common.json {
+            let mut out: Box<dyn Write> = if self.output == "-" {
+                Box::new(BufWriter::new(std::io::stdout().lock()))
+            } else {
+                Box::new(BufWriter::new(
+                    File::create(&self.output).map_err(RsomicsError::Io)?,
+                ))
+            };
+            res.write_tsv(&mut out)?;
+            out.flush().map_err(RsomicsError::Io)?;
+        }
+
+        Ok(res)
     }
 }
 
